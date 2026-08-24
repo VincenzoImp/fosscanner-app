@@ -9,7 +9,8 @@ import '../models/scanned_page.dart';
 /// target for this feature.
 List<Offset>? detectCorners(Uint8List imageBytes) => null;
 
-Uint8List warpDocument(Uint8List imageBytes, List<Offset> corners) => imageBytes;
+Uint8List warpDocument(Uint8List imageBytes, List<Offset> corners) =>
+    imageBytes;
 
 Uint8List applyFilter(Uint8List warpedBytes, PageFilter filter) => warpedBytes;
 
@@ -19,5 +20,4 @@ Uint8List adjustBrightnessContrast(
   Uint8List imageBytes, {
   required double brightness,
   required double contrast,
-}) =>
-    imageBytes;
+}) => imageBytes;

@@ -1,11 +1,11 @@
 import 'dart:async';
 import 'dart:typed_data';
-import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 
 import '../models/scanned_page.dart';
 import '../services/document_processor.dart';
+import '../services/image_metadata.dart';
 import '../widgets/corner_overlay.dart';
 
 const _filterLabels = {
@@ -36,6 +36,7 @@ class CornerAdjustScreen extends StatefulWidget {
     this.initialRotationQuarterTurns = 0,
     this.initialBrightness = 0.0,
     this.initialContrast = 1.0,
+    this.knownImageSize,
   });
 
   final Uint8List originalBytes;
@@ -44,6 +45,7 @@ class CornerAdjustScreen extends StatefulWidget {
   final int initialRotationQuarterTurns;
   final double initialBrightness;
   final double initialContrast;
+  final Size? knownImageSize;
 
   @override
   State<CornerAdjustScreen> createState() => _CornerAdjustScreenState();
@@ -80,13 +82,16 @@ class _CornerAdjustScreenState extends State<CornerAdjustScreen> {
 
   Future<void> _initialize() async {
     try {
-      final codec = await ui.instantiateImageCodec(widget.originalBytes);
-      final frame = await codec.getNextFrame();
-      final size = Size(frame.image.width.toDouble(), frame.image.height.toDouble());
-      frame.image.dispose();
-      codec.dispose();
+      // Read only the encoded header before any Flutter/OpenCV pixel decode.
+      // A small compressed input can otherwise expand into a hostile native
+      // allocation before the bounded warp-output calculation is reached.
+      final size =
+          widget.knownImageSize ??
+          await readEncodedImageSize(widget.originalBytes);
+      validateSourceImageSize(size);
 
-      final corners = widget.initialCorners ??
+      final corners =
+          widget.initialCorners ??
           detectCorners(widget.originalBytes) ??
           _fullBoundsCorners(size);
 
@@ -119,7 +124,16 @@ class _CornerAdjustScreenState extends State<CornerAdjustScreen> {
   Future<void> _updatePreviews() async {
     final corners = _corners;
     if (corners == null) return;
-    setState(() => _isGeneratingPreviews = true);
+    setState(() {
+      _isGeneratingPreviews = true;
+      // Invalidate the entire derived cache before work starts. If processing
+      // the new corners fails, Confirm must not silently export the previous
+      // crop while storing the newly dragged corner metadata.
+      _warpedForPreview = null;
+      _filterPreviews = null;
+      _finalPreviewBytes = null;
+      _error = null;
+    });
     try {
       final warped = warpDocument(widget.originalBytes, corners);
       final previews = <PageFilter, Uint8List>{
@@ -133,10 +147,12 @@ class _CornerAdjustScreenState extends State<CornerAdjustScreen> {
       });
       _updateFinalPreview();
     } catch (_) {
-      // Previews are a nice-to-have; if generation fails, Confirm still
-      // falls back to computing fresh from the current corners.
       if (!mounted) return;
-      setState(() => _isGeneratingPreviews = false);
+      setState(() {
+        _isGeneratingPreviews = false;
+        _error =
+            'Could not preview this crop. Adjust the corners and try again.';
+      });
     }
   }
 
@@ -148,6 +164,7 @@ class _CornerAdjustScreenState extends State<CornerAdjustScreen> {
   void _updateFinalPreview() {
     final base = _filterPreviews?[_selectedFilter];
     if (base == null) return;
+    setState(() => _finalPreviewBytes = null);
     try {
       final rotated = rotateImage(base, _rotationQuarterTurns);
       final adjusted = adjustBrightnessContrast(
@@ -158,15 +175,17 @@ class _CornerAdjustScreenState extends State<CornerAdjustScreen> {
       if (!mounted) return;
       setState(() => _finalPreviewBytes = adjusted);
     } catch (_) {
-      // Same reasoning as _updatePreviews: this is preview-only, Confirm
-      // recomputes from scratch if something's off.
+      // Confirm recomputes from scratch, but make it explicit that the visible
+      // base image does not currently include all selected adjustments.
+      if (!mounted) return;
+      setState(() => _error = 'Could not preview these adjustments.');
     }
   }
 
   Future<void> _goToFilterStep() async {
     if (_filterPreviews == null) {
       await _updatePreviews();
-      if (!mounted) return;
+      if (!mounted || _filterPreviews == null) return;
     }
     setState(() => _step = _Step.filter);
   }
@@ -179,9 +198,14 @@ class _CornerAdjustScreenState extends State<CornerAdjustScreen> {
       _error = null;
     });
     try {
-      final Uint8List filtered = _filterPreviews?[_selectedFilter] ??
-          applyFilter(_warpedForPreview ?? warpDocument(widget.originalBytes, corners), _selectedFilter);
-      final Uint8List processed = _finalPreviewBytes ??
+      final Uint8List filtered =
+          _filterPreviews?[_selectedFilter] ??
+          applyFilter(
+            _warpedForPreview ?? warpDocument(widget.originalBytes, corners),
+            _selectedFilter,
+          );
+      final Uint8List processed =
+          _finalPreviewBytes ??
           adjustBrightnessContrast(
             rotateImage(filtered, _rotationQuarterTurns),
             brightness: _brightness,
@@ -240,8 +264,8 @@ class _CornerAdjustScreenState extends State<CornerAdjustScreen> {
                   : const CircularProgressIndicator(),
             )
           : _step == _Step.corners
-              ? _buildCornersStep(context, imageSize, corners)
-              : _buildFilterStep(context),
+          ? _buildCornersStep(context, imageSize, corners)
+          : _buildFilterStep(context),
     );
   }
 
@@ -250,7 +274,11 @@ class _CornerAdjustScreenState extends State<CornerAdjustScreen> {
     return _isEditingExistingPage ? 'Edit page' : 'Adjust corners';
   }
 
-  Widget _buildCornersStep(BuildContext context, Size imageSize, List<Offset> corners) {
+  Widget _buildCornersStep(
+    BuildContext context,
+    Size imageSize,
+    List<Offset> corners,
+  ) {
     return Column(
       children: [
         if (_error != null)
@@ -309,7 +337,8 @@ class _CornerAdjustScreenState extends State<CornerAdjustScreen> {
   }
 
   Widget _buildFilterStep(BuildContext context) {
-    final previewBytes = _finalPreviewBytes ?? _filterPreviews?[_selectedFilter];
+    final previewBytes =
+        _finalPreviewBytes ?? _filterPreviews?[_selectedFilter];
     return Column(
       children: [
         if (_error != null)
@@ -368,7 +397,8 @@ class _CornerAdjustScreenState extends State<CornerAdjustScreen> {
             scrollDirection: Axis.horizontal,
             padding: const EdgeInsets.symmetric(horizontal: 16),
             children: [
-              for (final filter in PageFilter.values) _filterChip(context, filter),
+              for (final filter in PageFilter.values)
+                _filterChip(context, filter),
             ],
           ),
         ),
@@ -380,7 +410,9 @@ class _CornerAdjustScreenState extends State<CornerAdjustScreen> {
               children: [
                 Expanded(
                   child: OutlinedButton(
-                    onPressed: _isProcessing ? null : () => setState(() => _step = _Step.corners),
+                    onPressed: _isProcessing
+                        ? null
+                        : () => setState(() => _step = _Step.corners),
                     child: const Text('Back'),
                   ),
                 ),
@@ -425,18 +457,25 @@ class _CornerAdjustScreenState extends State<CornerAdjustScreen> {
               clipBehavior: Clip.antiAlias,
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: selected ? primary : Colors.transparent, width: 2),
+                border: Border.all(
+                  color: selected ? primary : Colors.transparent,
+                  width: 2,
+                ),
               ),
               child: previewBytes != null
                   ? Image.memory(previewBytes, fit: BoxFit.cover)
                   : ColoredBox(
-                      color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                      color: Theme.of(
+                        context,
+                      ).colorScheme.surfaceContainerHighest,
                       child: _isGeneratingPreviews
                           ? const Center(
                               child: SizedBox(
                                 width: 16,
                                 height: 16,
-                                child: CircularProgressIndicator(strokeWidth: 2),
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
                               ),
                             )
                           : null,
@@ -446,9 +485,9 @@ class _CornerAdjustScreenState extends State<CornerAdjustScreen> {
             Text(
               _filterLabels[filter]!,
               style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                    color: selected ? primary : null,
-                    fontWeight: selected ? FontWeight.bold : null,
-                  ),
+                color: selected ? primary : null,
+                fontWeight: selected ? FontWeight.bold : null,
+              ),
             ),
           ],
         ),
@@ -469,7 +508,11 @@ class _InitErrorView extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(Icons.error_outline, size: 48, color: Theme.of(context).colorScheme.error),
+          Icon(
+            Icons.error_outline,
+            size: 48,
+            color: Theme.of(context).colorScheme.error,
+          ),
           const SizedBox(height: 16),
           Text(message, textAlign: TextAlign.center),
           const SizedBox(height: 16),

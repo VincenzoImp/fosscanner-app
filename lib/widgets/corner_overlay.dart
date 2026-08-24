@@ -1,6 +1,15 @@
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/semantics.dart' show CustomSemanticsAction;
+
+const _cornerLabels = [
+  'Top-left corner',
+  'Top-right corner',
+  'Bottom-right corner',
+  'Bottom-left corner',
+];
 
 /// Shows a captured photo with a draggable quad overlay over the document
 /// corners. [corners] and [onChanged] are in the *image's* pixel space
@@ -33,8 +42,9 @@ class CornerOverlay extends StatefulWidget {
 }
 
 class _CornerOverlayState extends State<CornerOverlay> {
-  late List<Offset> _liveCorners = widget.corners;
+  late List<Offset> _liveCorners = [...widget.corners];
   int? _draggingIndex;
+  bool _pointerCancelled = false;
 
   @override
   void didUpdateWidget(CornerOverlay oldWidget) {
@@ -44,14 +54,17 @@ class _CornerOverlayState extends State<CornerOverlay> {
     // round-trips the same list back to us, which would be a no-op but is
     // worth avoiding for clarity.
     if (!identical(widget.corners, oldWidget.corners)) {
-      _liveCorners = widget.corners;
+      _liveCorners = [...widget.corners];
     }
   }
 
   Offset _clampToImage(Offset p) {
+    // Pixel coordinates end at width/height - 1. Allowing a handle to land at
+    // width or height makes perspective correction sample outside the photo,
+    // which can introduce a dark border along the exported page.
     return Offset(
-      p.dx.clamp(0.0, widget.imageSize.width),
-      p.dy.clamp(0.0, widget.imageSize.height),
+      p.dx.clamp(0.0, widget.imageSize.width - 1),
+      p.dy.clamp(0.0, widget.imageSize.height - 1),
     );
   }
 
@@ -60,13 +73,18 @@ class _CornerOverlayState extends State<CornerOverlay> {
     assert(_liveCorners.length == 4);
     return LayoutBuilder(
       builder: (context, constraints) {
-        final fitted = applyBoxFit(BoxFit.contain, widget.imageSize, constraints.biggest);
+        final fitted = applyBoxFit(
+          BoxFit.contain,
+          widget.imageSize,
+          constraints.biggest,
+        );
         final displaySize = fitted.destination;
         final scale = displaySize.width / widget.imageSize.width;
         final offsetX = (constraints.maxWidth - displaySize.width) / 2;
         final offsetY = (constraints.maxHeight - displaySize.height) / 2;
 
-        Offset toDisplay(Offset p) => Offset(p.dx * scale + offsetX, p.dy * scale + offsetY);
+        Offset toDisplay(Offset p) =>
+            Offset(p.dx * scale + offsetX, p.dy * scale + offsetY);
 
         final displayCorners = _liveCorners.map(toDisplay).toList();
 
@@ -84,43 +102,135 @@ class _CornerOverlayState extends State<CornerOverlay> {
               ),
             ),
             Positioned.fill(
-              child: CustomPaint(painter: _QuadPainter(displayCorners, context)),
+              child: CustomPaint(
+                painter: _QuadPainter(displayCorners, context),
+              ),
             ),
             for (var i = 0; i < 4; i++)
-              _cornerHandle(index: i, displayPos: displayCorners[i], scale: scale),
+              _cornerHandle(
+                index: i,
+                displayPos: displayCorners[i],
+                containerSize: constraints.biggest,
+                scale: scale,
+              ),
           ],
         );
       },
     );
   }
 
-  Widget _cornerHandle({required int index, required Offset displayPos, required double scale}) {
+  void _cancelDrag() {
+    setState(() {
+      _pointerCancelled = true;
+      _draggingIndex = null;
+      _liveCorners = [...widget.corners];
+    });
+  }
+
+  void _moveCornerForAccessibility(int index, Offset delta) {
+    final next = [..._liveCorners];
+    next[index] = _clampToImage(next[index] + delta);
+    setState(() => _liveCorners = next);
+    widget.onChanged(next);
+  }
+
+  Widget _cornerHandle({
+    required int index,
+    required Offset displayPos,
+    required Size containerSize,
+    required double scale,
+  }) {
     final isDragging = _draggingIndex == index;
-    final handleSize = isDragging ? 40.0 : 32.0;
+    final visibleHandleSize = isDragging ? 40.0 : 32.0;
+    const touchTargetSize = 48.0;
+    final left = (displayPos.dx - touchTargetSize / 2)
+        .clamp(0.0, math.max(0.0, containerSize.width - touchTargetSize))
+        .toDouble();
+    final top = (displayPos.dy - touchTargetSize / 2)
+        .clamp(0.0, math.max(0.0, containerSize.height - touchTargetSize))
+        .toDouble();
+    final localVisualCenter = displayPos - Offset(left, top);
+    final semanticStep = math.max(
+      1.0,
+      math.min(widget.imageSize.width, widget.imageSize.height) / 100,
+    );
+
     return Positioned(
-      left: displayPos.dx - handleSize / 2,
-      top: displayPos.dy - handleSize / 2,
-      width: handleSize,
-      height: handleSize,
-      child: GestureDetector(
-        onPanStart: (_) => setState(() => _draggingIndex = index),
-        onPanUpdate: (details) {
-          final imageDelta = Offset(details.delta.dx / scale, details.delta.dy / scale);
-          setState(() {
-            _liveCorners = [..._liveCorners];
-            _liveCorners[index] = _clampToImage(_liveCorners[index] + imageDelta);
-          });
+      left: left,
+      top: top,
+      width: touchTargetSize,
+      height: touchTargetSize,
+      child: Semantics(
+        label: _cornerLabels[index],
+        value:
+            '${_liveCorners[index].dx.round()}, '
+            '${_liveCorners[index].dy.round()} pixels',
+        hint: 'Use the directional actions to adjust this corner',
+        customSemanticsActions: {
+          const CustomSemanticsAction(label: 'Move left'): () =>
+              _moveCornerForAccessibility(index, Offset(-semanticStep, 0)),
+          const CustomSemanticsAction(label: 'Move right'): () =>
+              _moveCornerForAccessibility(index, Offset(semanticStep, 0)),
+          const CustomSemanticsAction(label: 'Move up'): () =>
+              _moveCornerForAccessibility(index, Offset(0, -semanticStep)),
+          const CustomSemanticsAction(label: 'Move down'): () =>
+              _moveCornerForAccessibility(index, Offset(0, semanticStep)),
         },
-        onPanEnd: (_) {
-          setState(() => _draggingIndex = null);
-          widget.onChanged(_liveCorners);
-        },
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: Colors.white,
-            border: Border.all(color: Theme.of(context).colorScheme.primary, width: 3),
-            boxShadow: const [BoxShadow(color: Colors.black38, blurRadius: 4)],
+        child: Listener(
+          onPointerCancel: (_) => _cancelDrag(),
+          child: GestureDetector(
+            excludeFromSemantics: true,
+            behavior: HitTestBehavior.opaque,
+            onPanStart: (_) => setState(() {
+              _pointerCancelled = false;
+              _draggingIndex = index;
+            }),
+            onPanUpdate: (details) {
+              final imageDelta = Offset(
+                details.delta.dx / scale,
+                details.delta.dy / scale,
+              );
+              setState(() {
+                _liveCorners = [..._liveCorners];
+                _liveCorners[index] = _clampToImage(
+                  _liveCorners[index] + imageDelta,
+                );
+              });
+            },
+            onPanEnd: (_) {
+              if (_pointerCancelled) {
+                setState(() => _pointerCancelled = false);
+                return;
+              }
+              setState(() => _draggingIndex = null);
+              widget.onChanged(_liveCorners);
+            },
+            onPanCancel: _cancelDrag,
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Positioned(
+                  left: localVisualCenter.dx - visibleHandleSize / 2,
+                  top: localVisualCenter.dy - visibleHandleSize / 2,
+                  child: SizedBox.square(
+                    dimension: visibleHandleSize,
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: Colors.white,
+                        border: Border.all(
+                          color: Theme.of(context).colorScheme.primary,
+                          width: 3,
+                        ),
+                        boxShadow: const [
+                          BoxShadow(color: Colors.black38, blurRadius: 4),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),

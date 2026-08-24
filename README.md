@@ -37,31 +37,41 @@ and this page list.*
   (dewarping) into a flat, upright page
 - Scan filters — Original, Auto-Enhance, Grayscale, and Black & White —
   with live thumbnail previews before you confirm
-- Re-edit any page after the fact (corners, filter) without re-scanning
-- Capture multiple pages in sequence, reorder-free scanning workflow
+- Re-edit any page after the fact (corners, filter, rotation, brightness,
+  and contrast) without re-scanning
+- Capture multiple pages in sequence and reorder them with drag-and-drop
 - Combine captured pages into a single PDF
 - Share the PDF via the OS share sheet (or download it directly on web)
 - Material 3 UI that follows the system's light/dark theme
 - No accounts, no cloud storage, no tracking
 
 Edge detection, perspective correction, and filters run on real OpenCV
-(`opencv_dart`) on Android/iOS/desktop. The web build doesn't support this
-(OpenCV bindings are native/FFI-only) — web is a quick preview/testing
-target, not the primary one; the raw captured photo is used as-is there.
+(`opencv_dart`) on Android/iOS/desktop. Desktop builds support importing
+images, but `image_picker` has no built-in desktop camera UI, so camera capture
+is only offered where the platform plugin reports it as supported. The web
+build doesn't support OpenCV (the bindings are native/FFI-only) — web is a
+quick preview/testing target, not the primary one; the raw captured photo is
+used as-is there.
 
 ## Privacy
 
 - All image processing and PDF generation happens on-device.
-- Captured photos and the generated PDF are only ever held in memory or
-  short-lived temp storage, and are cleaned up as soon as they're no longer
-  needed (page removed, "clear all", app closed, or right after sharing).
+- Imported gallery originals are never modified or deleted. App-owned camera
+  temp files are removed after the app attempts to copy their bytes into
+  memory (including failed reads), and in-progress pages remain only in memory
+  until the app is closed.
+- PDF sharing starts from in-memory bytes. Depending on the platform,
+  `share_plus` may materialize a copy in the app/OS cache for the receiving app;
+  that cache is OS-managed and is not guaranteed to disappear immediately
+  after the share sheet closes.
 - The app makes no network requests of its own. (The web build's rendering
   engine, CanvasKit, is fetched from Google's CDN by the Flutter web
   framework itself — this doesn't apply to the native Android/iOS builds.)
 
 ## Getting started
 
-Requires the Flutter SDK (Dart `>=3.0.0 <4.0.0`).
+Requires the Flutter SDK with Dart `>=3.10.0 <4.0.0` (matching
+`pubspec.yaml`).
 
 ```bash
 flutter pub get
@@ -81,7 +91,10 @@ flutter run
 
 `docker-compose.yml` provides two services that build against
 `ghcr.io/cirruslabs/flutter:stable`, so you don't need the Flutter/Android
-SDKs installed locally:
+SDKs installed locally. The APK service uses the image's x86_64 Android
+SDK/NDK toolchain; Docker Desktop uses emulation automatically on Apple
+Silicon, so that build is slower there. Native arm64 Linux Docker engines need
+amd64 emulation (for example, binfmt/QEMU) for the APK service:
 
 ```bash
 # Web preview, served on http://localhost:8080
