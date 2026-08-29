@@ -63,6 +63,7 @@ class _ScannerHomePageState extends State<ScannerHomePage> {
   late final List<ScannedPage> _pages;
   late final SharePlus _sharePlus;
   final ImagePicker _picker = ImagePicker();
+  final ImageProcessingQueue _imageProcessingQueue = ImageProcessingQueue();
   Future<void> _draftWriteTail = Future<void>.value();
   var _draftRevision = 0;
   var _documentGeneration = 0;
@@ -517,6 +518,7 @@ class _ScannerHomePageState extends State<ScannerHomePage> {
         builder: (_) => CornerAdjustScreen(
           originalBytes: bytes,
           operations: widget.cornerAdjustOperations,
+          processingQueue: _imageProcessingQueue,
         ),
       ),
     );
@@ -595,6 +597,7 @@ class _ScannerHomePageState extends State<ScannerHomePage> {
             initialBrightness: page.brightness,
             initialContrast: page.contrast,
             operations: widget.cornerAdjustOperations,
+            processingQueue: _imageProcessingQueue,
           ),
         ),
       );
