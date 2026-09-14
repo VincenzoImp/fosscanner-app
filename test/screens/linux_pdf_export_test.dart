@@ -125,7 +125,7 @@ void main() {
       expect(temporary.listSync(), isEmpty);
       expect(find.text('Keep this draft?'), findsNothing);
       expect(find.text('Save as PDF (1 pages)'), findsOneWidget);
-      expect(find.textContaining('Could not create a PDF'), findsNothing);
+      expect(find.text('Could not generate or share the PDF.'), findsNothing);
     },
     variant: TargetPlatformVariant.only(TargetPlatform.linux),
   );
@@ -139,7 +139,7 @@ void main() {
 
       expect(selector.calls, 1);
       expect(share.calls, 0);
-      expect(find.textContaining('Could not create a PDF'), findsOneWidget);
+      expect(find.text('Could not generate or share the PDF.'), findsOneWidget);
       expect(find.text('Keep this draft?'), findsNothing);
       expect(find.text('Save as PDF (1 pages)'), findsOneWidget);
     },
