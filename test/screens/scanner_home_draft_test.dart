@@ -154,7 +154,7 @@ void main() {
     final restored = [page(1), page(2)];
 
     await pumpHome(tester, store);
-    expect(find.text('Ready to Scan'), findsOneWidget);
+    expect(find.text('Restoring draft...'), findsOneWidget);
 
     completer.complete(restored);
     await tester.pump();
