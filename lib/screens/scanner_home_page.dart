@@ -735,8 +735,12 @@ class _ScannerHomePageState extends State<ScannerHomePage> {
     });
   }
 
-  Future<void> _askWhetherToKeepDraft() async {
-    if (_isClearingDraft || _pages.isEmpty) return;
+  Future<void> _askWhetherToKeepDraft(int exportedRevision) async {
+    if (_isClearingDraft ||
+        _pages.isEmpty ||
+        exportedRevision != _draftRevision) {
+      return;
+    }
     final clear = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
@@ -756,7 +760,12 @@ class _ScannerHomePageState extends State<ScannerHomePage> {
         ],
       ),
     );
-    if (clear != true || !mounted || _isClearingDraft) return;
+    if (clear != true ||
+        !mounted ||
+        _isClearingDraft ||
+        exportedRevision != _draftRevision) {
+      return;
+    }
     await _clearCurrentDraft();
   }
 
@@ -765,12 +774,13 @@ class _ScannerHomePageState extends State<ScannerHomePage> {
       (!kIsWeb && defaultTargetPlatform == TargetPlatform.android);
 
   Future<Uint8List> _createSearchablePdf(List<ScannedPage> pages) {
-    return ocr_service.createSearchablePdf([
-      for (final page in pages) page.processedBytes,
-    ], onProgress: (completed, total) {
-      if (!mounted) return;
-      setState(() => _ocrProgress = completed / total);
-    });
+    return ocr_service.createSearchablePdf(
+      [for (final page in pages) page.processedBytes],
+      onProgress: (completed, total) {
+        if (!mounted) return;
+        setState(() => _ocrProgress = completed / total);
+      },
+    );
   }
 
   Future<bool> _confirmImageOnlyFallback() async {
@@ -806,11 +816,7 @@ class _ScannerHomePageState extends State<ScannerHomePage> {
     return _sharePlus.share(
       ShareParams(
         files: [
-          XFile.fromData(
-            pdfBytes,
-            name: fileName,
-            mimeType: 'application/pdf',
-          ),
+          XFile.fromData(pdfBytes, name: fileName, mimeType: 'application/pdf'),
         ],
         fileNameOverrides: [fileName],
         text: message,
@@ -860,6 +866,7 @@ class _ScannerHomePageState extends State<ScannerHomePage> {
   Future<void> _generateAndSharePdf() async {
     if (_pages.isEmpty || _isClearingDraft || _isGeneratingPdf) return;
     final pages = List<ScannedPage>.of(_pages, growable: false);
+    final exportedRevision = _draftRevision;
 
     setState(() {
       _isGeneratingPdf = true;
@@ -916,7 +923,7 @@ class _ScannerHomePageState extends State<ScannerHomePage> {
       }
     }
     if (shared && mounted && !_isClearingDraft && _pages.isNotEmpty) {
-      await _askWhetherToKeepDraft();
+      await _askWhetherToKeepDraft(exportedRevision);
     }
   }
 
@@ -1145,11 +1152,11 @@ class _ScannerHomePageState extends State<ScannerHomePage> {
                         ? 'Clearing draft...'
                         : _isGeneratingPdf
                         ? _isCancellingPdf
-                            ? 'Cancelling PDF...'
-                            : _ocrProgress == null
-                            ? 'Generating PDF...'
-                            : 'Generating PDF '
-                                '${(_ocrProgress! * 100).round()}%'
+                              ? 'Cancelling PDF...'
+                              : _ocrProgress == null
+                              ? 'Generating PDF...'
+                              : 'Generating PDF '
+                                    '${(_ocrProgress! * 100).round()}%'
                         : 'Save as PDF (${_pages.length} pages)',
                     style: const TextStyle(fontSize: 16),
                   ),
