@@ -743,8 +743,12 @@ class _ScannerHomePageState extends State<ScannerHomePage> {
     });
   }
 
-  Future<void> _askWhetherToKeepDraft() async {
-    if (_isClearingDraft || _pages.isEmpty) return;
+  Future<void> _askWhetherToKeepDraft(int exportedRevision) async {
+    if (_isClearingDraft ||
+        _pages.isEmpty ||
+        exportedRevision != _draftRevision) {
+      return;
+    }
     final clear = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
@@ -764,7 +768,12 @@ class _ScannerHomePageState extends State<ScannerHomePage> {
         ],
       ),
     );
-    if (clear != true || !mounted || _isClearingDraft) return;
+    if (clear != true ||
+        !mounted ||
+        _isClearingDraft ||
+        exportedRevision != _draftRevision) {
+      return;
+    }
     await _clearCurrentDraft();
   }
 
@@ -866,6 +875,7 @@ class _ScannerHomePageState extends State<ScannerHomePage> {
   Future<void> _generateAndSharePdf() async {
     if (_pages.isEmpty || _isClearingDraft || _isGeneratingPdf) return;
     final pages = List<ScannedPage>.of(_pages, growable: false);
+    final exportedRevision = _draftRevision;
     // The last page can be removed while encoding, which unmounts the button.
     // Keep its original rectangle for the required iPad popover anchor.
     final shareOrigin = _shareOrigin;
@@ -931,7 +941,7 @@ class _ScannerHomePageState extends State<ScannerHomePage> {
       }
     }
     if (shared && mounted && !_isClearingDraft && _pages.isNotEmpty) {
-      await _askWhetherToKeepDraft();
+      await _askWhetherToKeepDraft(exportedRevision);
     }
   }
 
